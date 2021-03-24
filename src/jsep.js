@@ -1,6 +1,6 @@
 //     JavaScript Expression Parser (JSEP) <%= version %>
 //     JSEP may be freely distributed under the MIT License
-//     http://jsep.from.so/
+//     https://ericsmekens.github.io/jsep/
 
 /*global module: true, exports: true, console: true */
 (function (root) {
@@ -60,6 +60,8 @@
 			'+': 9, '-': 9,
 			'*': 10, '/': 10, '%': 10
 		},
+	// Additional valid identifier chars, apart from a-z, A-Z and 0-9 (except on the starting char)
+		additional_identifier_chars = {'$': t, '_': t},
 	// Get return the longest key length of any object
 		getMaxKeyLen = function(obj) {
 			var max_len = 0, len;
@@ -102,17 +104,17 @@
 			return (ch >= 48 && ch <= 57); // 0...9
 		},
 		isIdentifierStart = function(ch) {
-			return (ch === 36) || (ch === 95) || // `$` and `_`
-					(ch >= 65 && ch <= 90) || // A...Z
+			return  (ch >= 65 && ch <= 90) || // A...Z
 					(ch >= 97 && ch <= 122) || // a...z
-                    (ch >= 128 && !binary_ops[String.fromCharCode(ch)]); // any non-ASCII that is not an operator
+					(ch >= 128 && !binary_ops[String.fromCharCode(ch)]) || // any non-ASCII that is not an operator
+					(additional_identifier_chars.hasOwnProperty(String.fromCharCode(ch))); // additional characters
 		},
 		isIdentifierPart = function(ch) {
-			return (ch === 36) || (ch === 95) || // `$` and `_`
-					(ch >= 65 && ch <= 90) || // A...Z
+			return 	(ch >= 65 && ch <= 90) || // A...Z
 					(ch >= 97 && ch <= 122) || // a...z
 					(ch >= 48 && ch <= 57) || // 0...9
-                    (ch >= 128 && !binary_ops[String.fromCharCode(ch)]); // any non-ASCII that is not an operator
+					(ch >= 128 && !binary_ops[String.fromCharCode(ch)])|| // any non-ASCII that is not an operator
+					(additional_identifier_chars.hasOwnProperty(String.fromCharCode(ch))); // additional characters
 		},
 
 		// Parsing
@@ -142,6 +144,7 @@
 					var test = gobbleBinaryExpression(),
 						consequent, alternate;
 					gobbleSpaces();
+
 					if(exprICode(index) === QUMARK_CODE) {
 						// Ternary expression: test ? consequent : alternate
 						index++;
@@ -178,7 +181,13 @@
 					gobbleSpaces();
 					var biop, to_check = expr.substr(index, max_binop_len), tc_len = to_check.length;
 					while(tc_len > 0) {
-						if(binary_ops.hasOwnProperty(to_check)) {
+						// Don't accept a binary op when it is an identifier.
+						// Binary ops that start with a identifier-valid character must be followed
+						// by a non identifier-part valid character
+						if(binary_ops.hasOwnProperty(to_check) && (
+							!isIdentifierStart(exprICode(index)) ||
+							(index+to_check.length< expr.length && !isIdentifierPart(exprICode(index+to_check.length)))
+						)) {
 							index += tc_len;
 							return to_check;
 						}
@@ -190,7 +199,7 @@
 				// This function is responsible for gobbling an individual expression,
 				// e.g. `1`, `1+2`, `a+(b*2)-Math.sqrt(2)`
 				gobbleBinaryExpression = function() {
-					var ch_i, node, biop, prec, stack, biop_info, left, right, i;
+					var ch_i, node, biop, prec, stack, biop_info, left, right, i, cur_biop;
 
 					// First, try to get the leftmost thing
 					// Then, check to see if there's a binary operator operating on that leftmost thing
@@ -221,6 +230,7 @@
 						}
 						biop_info = { value: biop, prec: prec };
 
+						cur_biop = biop;
 						// Reduce: make a binary expression from the three topmost entries.
 						while ((stack.length > 2) && (prec <= stack[stack.length - 2].prec)) {
 							right = stack.pop();
@@ -232,7 +242,7 @@
 
 						node = gobbleToken();
 						if(!node) {
-							throwError("Expected expression after " + biop, index);
+							throwError("Expected expression after " + cur_biop, index);
 						}
 						stack.push(biop_info, node);
 					}
@@ -249,7 +259,7 @@
 				// An individual part of a binary expression:
 				// e.g. `foo.bar(baz)`, `1`, `"abc"`, `(a % 2)` (because it's in parenthesis)
 				gobbleToken = function() {
-					var ch, to_check, tc_len;
+					var ch, to_check, tc_len, node;
 
 					gobbleSpaces();
 					ch = exprICode(index);
@@ -257,16 +267,24 @@
 					if(isDecimalDigit(ch) || ch === PERIOD_CODE) {
 						// Char code 46 is a dot `.` which can start off a numeric literal
 						return gobbleNumericLiteral();
-					} else if(ch === SQUOTE_CODE || ch === DQUOTE_CODE) {
+					}
+
+					if(ch === SQUOTE_CODE || ch === DQUOTE_CODE) {
 						// Single or double quotes
-						return gobbleStringLiteral();
+						node = gobbleStringLiteral();
 					} else if (ch === OBRACK_CODE) {
-						return gobbleArray();
+						node = gobbleArray();
 					} else {
 						to_check = expr.substr(index, max_unop_len);
 						tc_len = to_check.length;
 						while(tc_len > 0) {
-							if(unary_ops.hasOwnProperty(to_check)) {
+						// Don't accept an unary op when it is an identifier.
+						// Unary ops that start with a identifier-valid character must be followed
+						// by a non identifier-part valid character
+							if(unary_ops.hasOwnProperty(to_check) && (
+								!isIdentifierStart(exprICode(index)) ||
+								(index+to_check.length < expr.length && !isIdentifierPart(exprICode(index+to_check.length)))
+							)) {
 								index += tc_len;
 								var argument = gobbleToken();
 								if(!argument) {
@@ -282,13 +300,62 @@
 							to_check = to_check.substr(0, --tc_len);
 						}
 
-						if (isIdentifierStart(ch) || ch === OPAREN_CODE) { // open parenthesis
-							// `foo`, `bar.baz`
-							return gobbleVariable();
+						if (isIdentifierStart(ch)) {
+							node = gobbleIdentifier();
+						} else if (ch === OPAREN_CODE) { // open parenthesis
+							node = gobbleGroup();
 						}
 					}
-					
-					return false;
+
+					if (!node) {
+						return false;
+					}
+
+					gobbleSpaces();
+
+					ch = exprICode(index);
+
+					// Gobble properties of of identifiers/strings/arrays/groups.
+					// e.g. `foo`, `bar.baz`, `foo['bar'].baz`
+					// It also gobbles function calls:
+					// e.g. `Math.acos(obj.angle)`
+
+					while(ch === PERIOD_CODE || ch === OBRACK_CODE || ch === OPAREN_CODE) {
+						index++;
+						if(ch === PERIOD_CODE) {
+							gobbleSpaces();
+							node = {
+								type: MEMBER_EXP,
+								computed: false,
+								object: node,
+								property: gobbleIdentifier()
+							};
+						} else if(ch === OBRACK_CODE) {
+							node = {
+								type: MEMBER_EXP,
+								computed: true,
+								object: node,
+								property: gobbleExpression()
+							};
+							gobbleSpaces();
+							ch = exprICode(index);
+							if(ch !== CBRACK_CODE) {
+								throwError('Unclosed [', index);
+							}
+							index++;
+						} else if(ch === OPAREN_CODE) {
+							// A function call is being made; gobble all the arguments
+							node = {
+								type: CALL_EXP,
+								'arguments': gobbleArguments(CPAREN_CODE),
+								callee: node
+							};
+						}
+						gobbleSpaces();
+						ch = exprICode(index);
+					}
+
+					return node;
 				},
 				// Parse simple numeric literals: `12`, `3.4`, `.5`. Do this by using a string to
 				// keep track of everything in the numeric literal and then calling `parseFloat` on that string
@@ -422,15 +489,30 @@
 				// e.g. `foo(bar, baz)`, `my_func()`, or `[bar, baz]`
 				gobbleArguments = function(termination) {
 					var ch_i, args = [], node, closed = false;
+					var separator_count = 0;
 					while(index < length) {
 						gobbleSpaces();
 						ch_i = exprICode(index);
 						if(ch_i === termination) { // done parsing
 							closed = true;
 							index++;
+							if(termination === CPAREN_CODE && separator_count && separator_count >= args.length){
+								throwError('Unexpected token ' + String.fromCharCode(termination), index);
+							}
 							break;
 						} else if (ch_i === COMMA_CODE) { // between expressions
 							index++;
+							separator_count++;
+							if(separator_count !== args.length) { // missing argument
+								if(termination === CPAREN_CODE) {
+									throwError('Unexpected token ,', index);
+								}
+								else if(termination === CBRACK_CODE) {
+									for(var arg = args.length; arg< separator_count; arg++) {
+										args.push(null);
+									}
+								}
+							}
 						} else {
 							node = gobbleExpression();
 							if(!node || node.type === COMPOUND) {
@@ -443,58 +525,6 @@
 						throwError('Expected ' + String.fromCharCode(termination), index);
 					}
 					return args;
-				},
-
-				// Gobble a non-literal variable name. This variable name may include properties
-				// e.g. `foo`, `bar.baz`, `foo['bar'].baz`
-				// It also gobbles function calls:
-				// e.g. `Math.acos(obj.angle)`
-				gobbleVariable = function() {
-					var ch_i, node;
-					ch_i = exprICode(index);
-
-					if(ch_i === OPAREN_CODE) {
-						node = gobbleGroup();
-					} else {
-						node = gobbleIdentifier();
-					}
-					gobbleSpaces();
-					ch_i = exprICode(index);
-					while(ch_i === PERIOD_CODE || ch_i === OBRACK_CODE || ch_i === OPAREN_CODE) {
-						index++;
-						if(ch_i === PERIOD_CODE) {
-							gobbleSpaces();
-							node = {
-								type: MEMBER_EXP,
-								computed: false,
-								object: node,
-								property: gobbleIdentifier()
-							};
-						} else if(ch_i === OBRACK_CODE) {
-							node = {
-								type: MEMBER_EXP,
-								computed: true,
-								object: node,
-								property: gobbleExpression()
-							};
-							gobbleSpaces();
-							ch_i = exprICode(index);
-							if(ch_i !== CBRACK_CODE) {
-								throwError('Unclosed [', index);
-							}
-							index++;
-						} else if(ch_i === OPAREN_CODE) {
-							// A function call is being made; gobble all the arguments
-							node = {
-								type: CALL_EXP,
-								'arguments': gobbleArguments(CPAREN_CODE),
-								callee: node
-							};
-						}
-						gobbleSpaces();
-						ch_i = exprICode(index);
-					}
-					return node;
 				},
 
 				// Responsible for parsing a group of things within parentheses `()`
@@ -584,6 +614,15 @@
 	};
 
 	/**
+	 * @method jsep.addIdentifierChar
+	 * @param {string} char The additional character to treat as a valid part of an identifier
+	 * @return jsep
+	 */
+	jsep.addIdentifierChar = function(char) {
+		additional_identifier_chars[char] = t; return this;
+	};
+
+	/**
 	 * @method jsep.addLiteral
 	 * @param {string} literal_name The name of the literal to add
 	 * @param {*} literal_value The value of the literal
@@ -617,6 +656,17 @@
 
 		return this;
 	};
+
+	/**
+	 * @method jsep.removeIdentifierChar
+	 * @param {string} char The additional character to stop treating as a valid part of an identifier
+	 * @return jsep
+	 */
+	jsep.removeIdentifierChar = function(char) {
+		delete additional_identifier_chars[char];
+		return this;
+	};
+
 
 	/**
 	 * @method jsep.removeBinaryOp

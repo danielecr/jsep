@@ -1,3 +1,19 @@
+## 0.4.0 - 2021-03-21
+### Added
+- You can add or remove additional valid identifier chars.
+- Support for gobble properties from array/strings. e.g. (`[1].length`)
+
+### Updated
+- Updated several dependancies for audit fixes.
+
+## 0.3.5 - 2018-08-23
+### Updated
+- Development dependencies update for audit fixes.
+
+## 0.3.4 - 2018-03-29
+### Fixed
+- Fixed identifiers as custom ops (#68,#83)
+
 ## 0.3.3 - 2017-12-16
 ### Notice
 - No functional changes, only updated support for typescript definitions.
